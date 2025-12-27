@@ -1,0 +1,10 @@
+logs/
+bin/
+__pycache__/
+.pytest_cache/
+*.swp
+*.queue
+*.tmp
+*.bak
+context_config.yaml
+summary.md
