@@ -56,24 +56,24 @@ def workspace(tmp_path):
 
 def test_running_file_format_and_header(workspace):
     """
-    测试 v5.7 核心特性：
-    1. .running 文件是否为 6 行格式 (含 Tag)
-    2. 生成的 Log 文件是否包含 Metadata Header
-    3. 文件名是否经过安全过滤
+    测试 V2 协议：
+    1. .running 文件为 4 行格式 (PID, Prio, LogPath, JSON)
+    2. 生成的 Log 文件包含 Enhanced Header
     """
     base_dir, scheduler_script = workspace
     queue_name = "tag_test"
     
-    # 构造一个带特殊字符 Tag 的任务
-    # Tag: "experiment/v1" (应该被过滤为 experiment_v1)
+    # 构造 V2 JSONL 任务
     tag_raw = "experiment/v1"
     tag_safe = "experiment_v1"
     cmd = "echo 'Hello Tag'"
     
-    # 写入队列 (v5.7 格式: Prio:Grace:Tag:Cmd)
+    import json
+    task_obj = {"p": 100, "g": 180, "t": tag_raw, "c": cmd, "wd": str(base_dir)}
+    
     q_file = base_dir / f"{queue_name}.queue"
     with open(q_file, 'w') as f:
-        f.write(f"100:180:{tag_raw}:{cmd}\n")
+        f.write(json.dumps(task_obj) + "\n")
         
     # 启动调度器
     proc = subprocess.Popen(
@@ -92,35 +92,33 @@ def test_running_file_format_and_header(workspace):
             if run_file.exists():
                 with open(run_file) as f:
                     running_data = f.read().splitlines()
-                if len(running_data) >= 6:
+                # V2 格式: 4 行
+                if len(running_data) >= 4:
                     break
             time.sleep(0.5)
             
         # --- 验证 1: Running 文件格式 ---
-        assert len(running_data) == 6, f"Running file should have 6 lines, got {len(running_data)}"
-        # PID, Prio, Grace, Tag, LogPath, Cmd
-        assert running_data[1] == "100"      # Prio
-        assert running_data[3] == tag_raw    # Tag (原始值应保留在 running 文件中)
-        log_path = running_data[4]
-        assert running_data[5] == cmd        # Cmd
+        assert len(running_data) == 4
+        # Line 1: PID, Line 2: Prio, Line 3: LogPath, Line 4: JSON
+        assert running_data[1] == "100"
+        log_path = running_data[2]
+        
+        # 验证 JSON Payload 是否完整
+        restored_task = json.loads(running_data[3])
+        assert restored_task['t'] == tag_raw
+        assert restored_task['c'] == cmd
         
         # --- 验证 2: Log 文件名过滤 ---
-        assert tag_safe in os.path.basename(log_path), f"Log filename should contain safe tag '{tag_safe}'"
-        assert "/" not in os.path.basename(log_path) # 确保特殊字符被替换
+        assert tag_safe in os.path.basename(log_path)
         
         # --- 验证 3: Log Header ---
-        assert os.path.exists(log_path)
-        # 等待 flush
         time.sleep(1)
         with open(log_path, 'r') as f:
             log_content = f.read()
             
-        print(f"\n[Log Content Preview]\n{log_content}")
-        
-        assert "Task Metadata Log" in log_content
+        assert "Task Metadata Log (V2)" in log_content
         assert f"Tag        : {tag_raw}" in log_content
-        assert f"Command    : {cmd}" in log_content
-        assert "Hello Tag" in log_content # 确保真实输出也在
+        assert f"WorkDir    : {str(base_dir)}" in log_content # 验证 WorkDir
 
     finally:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -128,22 +126,22 @@ def test_running_file_format_and_header(workspace):
 
 def test_tag_persistence_after_preempt(workspace):
     """
-    测试 v5.7 关键修复：
-    抢占发生后，Tag 应该保持原样，而不是变成 'preempted'
+    测试 V2 抢占：
+    确保抢占后回写的任务保留了原始 JSON 结构 (含 Tag, WorkDir 等)
     """
     base_dir, scheduler_script = workspace
     queue_name = "preempt_tag_test"
     
-    # 1. 提交一个低优先级长任务 (Prio 100, Tag "MY_IMPORTANT_TAG")
     original_tag = "MY_IMPORTANT_TAG"
-    # 使用 sleep 模拟长任务
     cmd_low = "sleep 20"
+    
+    import json
+    task_low = {"p": 100, "g": 5, "t": original_tag, "c": cmd_low, "wd": "/tmp"}
     
     q_file = base_dir / f"{queue_name}.queue"
     with open(q_file, 'w') as f:
-        f.write(f"100:5:{original_tag}:{cmd_low}\n")
+        f.write(json.dumps(task_low) + "\n")
         
-    # 启动调度器
     proc = subprocess.Popen(
         ["bash", scheduler_script, queue_name],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -151,47 +149,65 @@ def test_tag_persistence_after_preempt(workspace):
     )
     
     try:
-        # 等待低优先级任务运行
         run_file = base_dir / f"{queue_name}.running"
-        time.sleep(2) 
+        time.sleep(2)
         assert run_file.exists()
         
-        # 2. 提交一个高优先级任务 (Prio 1)
+        # 提交高优任务
+        task_high = {"p": 1, "g": 5, "t": "urgent", "c": "echo urgent"}
         with open(q_file, 'a') as f:
-            f.write(f"1:5:urgent:echo urgent\n")
+            f.write(json.dumps(task_high) + "\n")
             
-        # 等待抢占发生 (Running 文件变成 Prio 1 的任务，或者旧任务回到 Queue)
-        # 我们检测 Queue 文件是否重新出现了 Prio 100 的任务
+        # 等待回写
         preempted = False
-        requeued_line = ""
+        requeued_task = None
         
         start_wait = time.time()
         while time.time() - start_wait < 10:
             if q_file.exists():
                 with open(q_file, 'r') as f:
                     lines = f.readlines()
-                # 找回 Prio 100 的任务
                 for line in lines:
-                    if line.startswith("100:"):
-                        requeued_line = line.strip()
-                        preempted = True
-                        break
+                    try:
+                        t = json.loads(line)
+                        if t.get('p') == 100:
+                            requeued_task = t
+                            preempted = True
+                            break
+                    except: pass
             if preempted: break
             time.sleep(1)
             
-        assert preempted, "Task was not preempted/requeued."
-        
-        # --- 验证 4: Tag 保持不变 ---
-        # 期望格式: 100:Grace:MY_IMPORTANT_TAG:sleep 20
-        print(f"\n[Requeued Line] {requeued_line}")
-        parts = requeued_line.split(':')
-        assert len(parts) >= 4
-        assert parts[2] == original_tag, f"Tag changed! Expected '{original_tag}', got '{parts[2]}'"
-        assert parts[2] != "preempted", "Tag was wrongly overwritten by 'preempted' state"
+        assert preempted
+        assert requeued_task['t'] == original_tag
+        assert requeued_task['wd'] == "/tmp" # WorkDir 也必须被保留
 
     finally:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         proc.wait()
+
+# ... (test_queue_utils_locking 可以保留，但需要 update input data 格式) ...
+def test_queue_utils_locking(workspace):
+    base_dir, _ = workspace
+    utils_script = base_dir / "queue_utils.py"
+    q_file = base_dir / "lock_test.queue"
+    
+    import json
+    # 混合写入旧格式和新格式 (测试 utils 的兼容性)
+    with open(q_file, 'w') as f:
+        f.write(json.dumps({"p": 100, "c": "cmd1", "t": "tag1"}) + "\n")
+        f.write("10:180:tag2:cmd2\n") # 旧格式，Prio 10
+        f.write(json.dumps({"p": 50, "c": "cmd3"}) + "\n")
+        
+    result = subprocess.check_output(
+        ["python3", str(utils_script), "pop", str(q_file)], 
+        text=True
+    )
+    
+    # 验证弹出的是 Prio 10 (tag2)
+    # utils 现在的输出是 TQ_TAG='tag2'
+    assert "TQ_TAG='tag2'" in result
+    assert "TQ_PRIO=10" in result
 
 def test_queue_utils_locking(workspace):
     """

@@ -7,4 +7,4 @@ __pycache__/
 *.tmp
 *.bak
 context_config.yaml
-summary.md
+summary*

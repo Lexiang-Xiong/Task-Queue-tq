@@ -115,20 +115,19 @@ def test_graceful_shutdown_and_logging(workspace):
         pid = -1
         log_path = ""
         run_file = base_dir / f"{queue_name}.running"
-        
+
         while time.time() - start_time < 5:
             if run_file.exists():
                 try:
                     with open(run_file) as f:
                         lines = f.read().splitlines()
-                        # --- 修复点：适配 v5.7 的 6 行格式 ---
-                        if len(lines) >= 6:
+                        # V2 格式适配 (4 行)
+                        if len(lines) >= 4:
                             pid = int(lines[0])
-                            # Index 0: PID, 1: Prio, 2: Grace, 3: Tag, 4: LogPath, 5: Cmd
-                            log_path = lines[4] 
+                            log_path = lines[2] # Line 3 is LogPath
                             break
-                        # 兼容旧版本测试逻辑（防止回滚代码时测试全崩）
-                        elif len(lines) >= 5:
+                        # 旧格式兼容
+                        elif len(lines) >= 5 and "{" not in lines[3]:
                             pid = int(lines[0])
                             log_path = lines[3]
                             break

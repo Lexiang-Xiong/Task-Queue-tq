@@ -84,90 +84,115 @@ while true; do
         done
     fi
 
-    # A: Yield
+    # A: Yield (抢占检测)
     if [ -n "$unmanaged_pid" ]; then
         if [ -n "$managed_pid" ]; then
             log "YIELD: Unmanaged PID $unmanaged_pid."
-            curr_prio=$(sed -n '2p' "$RUNNING_FILE")
-            curr_grace=$(sed -n '3p' "$RUNNING_FILE")
-            curr_tag=$(sed -n '4p' "$RUNNING_FILE") # 从文件读取 Tag
-            curr_cmd=$(sed -n '6p' "$RUNNING_FILE") # Cmd is now line 6
-            
+            # 读取 .running 文件获取恢复信息
+            # V2 Running File: Line 4 is JSON String
+            curr_json=$(sed -n '4p' "$RUNNING_FILE")
+            curr_grace=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['g'])" "$curr_json" 2>/dev/null)
+            if [ -z "$curr_grace" ]; then curr_grace=180; fi # Fallback
+
             terminate_task "$managed_pid" "$curr_grace"
-            # 保留原始 Tag
-            echo "${curr_prio}:${curr_grace}:${curr_tag}:${curr_cmd}" >> "$QUEUE_FILE"
+            
+            # 恢复: 直接把 JSON 写回队列
+            if [ -n "$curr_json" ]; then
+                echo "$curr_json" >> "$QUEUE_FILE"
+            fi
             rm -f "$RUNNING_FILE"
         fi
         sleep 10
         continue
 
-    # B: Preempt
+    # B: Preempt (优先级抢占)
     elif [ -f "$RUNNING_FILE" ] && [ -s "$QUEUE_FILE" ]; then
+        # V2: Line 2 is Priority
         curr_prio=$(sed -n '2p' "$RUNNING_FILE")
+        if [ -z "$curr_prio" ]; then curr_prio=0; fi # Safety
+        
         best_prio=$(python3 "$UTILS_SCRIPT" peek_prio "$QUEUE_FILE")
         
         if [ "$best_prio" -lt "$curr_prio" ]; then
             log "PREEMPT: Queue($best_prio) > Current($curr_prio)."
-            curr_grace=$(sed -n '3p' "$RUNNING_FILE")
-            curr_tag=$(sed -n '4p' "$RUNNING_FILE")
-            curr_cmd=$(sed -n '6p' "$RUNNING_FILE")
             
+            curr_json=$(sed -n '4p' "$RUNNING_FILE")
+            curr_grace=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['g'])" "$curr_json" 2>/dev/null)
+            if [ -z "$curr_grace" ]; then curr_grace=180; fi
+
             terminate_task "$managed_pid" "$curr_grace"
-            # 保留原始 Tag
-            echo "${curr_prio}:${curr_grace}:${curr_tag}:${curr_cmd}" >> "$QUEUE_FILE"
+            
+            if [ -n "$curr_json" ]; then
+                echo "$curr_json" >> "$QUEUE_FILE"
+            fi
             rm -f "$RUNNING_FILE"
             continue
         fi
 
-    # C: Start
+    # C: Start (启动任务)
     elif [ ! -f "$RUNNING_FILE" ] && [ -s "$QUEUE_FILE" ]; then
-        best_line=$(python3 "$UTILS_SCRIPT" pop "$QUEUE_FILE")
-        if [ -z "$best_line" ]; then sleep 1; continue; fi
-
-        best_prio=$(echo "$best_line" | cut -d: -f1)
-        best_grace=$(echo "$best_line" | cut -d: -f2)
-        best_tag=$(echo "$best_line" | cut -d: -f3)
-        best_cmd=$(echo "$best_line" | cut -d: -f4-)
+        # 1. 调用 Python 获取变量 (核心变化)
+        # 这一步会执行 pop 并设置 TQ_PRIO, TQ_CMD 等变量
+        eval $(python3 "$UTILS_SCRIPT" pop "$QUEUE_FILE")
         
-        if [ -z "$best_cmd" ]; then # 兼容旧数据
-            best_cmd=$best_tag
-            best_tag="default"
-        fi
+        if [ -z "$TQ_CMD" ]; then sleep 1; continue; fi
 
-        # 安全过滤 Tag
-        safe_tag=$(echo "$best_tag" | sed 's/[^a-zA-Z0-9._-]/_/g')
+        # 安全 Tag 用于文件名
+        safe_tag=$(echo "$TQ_TAG" | sed 's/[^a-zA-Z0-9._-]/_/g')
 
         TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
         TASK_LOG_FILE="$TASK_LOG_DIR/${QUEUE_NAME}_${TIMESTAMP}_${safe_tag}.log"
         
-        log "START: Task (Prio: $best_prio, Tag: $best_tag). Output -> $TASK_LOG_FILE"
+        log "START: Task (Prio: $TQ_PRIO, Tag: $TQ_TAG). Output -> $TASK_LOG_FILE"
         
+        # 2. 写入增强版 Header
         # Write Header
         {
             echo "=========================================="
-            echo " Task Metadata Log"
+            echo " Task Metadata Log (V2)"
             echo "=========================================="
             echo " Start Time : $(date)"
             echo " Queue      : $QUEUE_NAME"
-            echo " Tag        : $best_tag"
-            echo " Priority   : $best_prio"
-            echo " Grace      : ${best_grace}s"
-            echo " Command    : $best_cmd"
+            echo " Tag        : $TQ_TAG"
+            echo " Priority   : $TQ_PRIO"
+            echo " Grace      : ${TQ_GRACE}s"
+            echo " WorkDir    : ${TQ_WORKDIR:-"(None)"}"
+            
+            if [ -n "$TQ_GIT_HASH" ]; then
+                echo " Git Hash   : $TQ_GIT_HASH"
+                echo " -> Restore : git checkout $TQ_GIT_HASH"
+            fi
+            
+            echo " Command    : $TQ_CMD"
             echo "=========================================="
             echo ""
             echo ">>> Task Output Follows >>>"
             echo ""
         } > "$TASK_LOG_FILE"
 
-        if [ "$IS_GPU_MODE" = true ]; then
-            (export CUDA_VISIBLE_DEVICES=$GPU_ID; eval "$best_cmd") >> "$TASK_LOG_FILE" 2>&1 &
-        else
-            (eval "$best_cmd") >> "$TASK_LOG_FILE" 2>&1 &
-        fi
+        # 3. 切换目录 & 执行
+        # 使用子 shell 避免影响 scheduler 自身路径
+        (
+            if [ -n "$TQ_WORKDIR" ] && [ -d "$TQ_WORKDIR" ]; then
+                cd "$TQ_WORKDIR" || echo "[Scheduler] Failed to cd to $TQ_WORKDIR"
+            fi
+            
+            if [ "$IS_GPU_MODE" = true ]; then
+                export CUDA_VISIBLE_DEVICES=$GPU_ID
+            fi
+            
+            # 执行命令
+            eval "$TQ_CMD"
+        ) >> "$TASK_LOG_FILE" 2>&1 &
         
         new_pid=$!
-        # 写入 6 行: PID, Prio, Grace, Tag, LogPath, Cmd
-        echo -e "$new_pid\n$best_prio\n$best_grace\n$best_tag\n$TASK_LOG_FILE\n$best_cmd" > "$RUNNING_FILE"
+        
+        # 4. 写入 V2 Running File
+        # Line 1: PID
+        # Line 2: Priority (for fast shell compare)
+        # Line 3: LogPath (for tq st)
+        # Line 4: JSON Payload (for full restore)
+        echo -e "$new_pid\n$TQ_PRIO\n$TASK_LOG_FILE\n$TQ_JSON" > "$RUNNING_FILE"
     fi
 
     sleep 3
