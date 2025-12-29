@@ -8,7 +8,7 @@ set -m
 if [ -z "$1" ]; then exit 1; fi
 
 QUEUE_NAME="$1"
-BASE_DIR="$HOME/task_queue" 
+BASE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 QUEUE_FILE="$BASE_DIR/${QUEUE_NAME}.queue"
 RUNNING_FILE="$BASE_DIR/${QUEUE_NAME}.running"
 LOG_FILE="$BASE_DIR/logs/scheduler_${QUEUE_NAME}.log"

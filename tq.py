@@ -14,7 +14,7 @@ import subprocess
 import shutil
 from pathlib import Path
 
-BASE_DIR = os.path.expanduser("~/task_queue")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 TASK_LOG_DIR = os.path.join(LOG_DIR, "tasks")
 SCHEDULER_SCRIPT = os.path.join(BASE_DIR, "scheduler.sh")

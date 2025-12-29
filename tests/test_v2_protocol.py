@@ -27,7 +27,7 @@ def v2_workspace(tmp_path):
     
     # Create Scheduler Wrapper
     with open(SCHEDULER_PATH, 'r') as f:
-        content = f.read().replace('BASE_DIR="$HOME/task_queue"', f'BASE_DIR="{str(d)}"')
+        content = f.read()
     
     sched_script = d / "scheduler_test.sh"
     with open(sched_script, 'w') as f:

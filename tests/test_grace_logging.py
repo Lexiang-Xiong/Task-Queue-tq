@@ -44,9 +44,7 @@ def workspace(tmp_path):
     # 修改 scheduler.sh 中的 BASE_DIR
     with open(SCHEDULER_PATH, 'r') as f:
         content = f.read()
-    
-    content = content.replace('BASE_DIR="$HOME/task_queue"', f'BASE_DIR="{str(d)}"')
-    
+        
     test_scheduler = d / "scheduler_test.sh"
     with open(test_scheduler, 'w') as f:
         f.write(content)
