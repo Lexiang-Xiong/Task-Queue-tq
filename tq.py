@@ -456,7 +456,7 @@ class TaskQueueShell(cmd.Cmd):
                 print(f"{idx+1:<{ID_WIDTH}} | {dt_str:<{TIME_WIDTH}} | {size_kb:.1f} KB  | {fname_display:<{FILE_WIDTH}} | {note_display}")
             if len(files) > 20: print(f"... and {len(files) - 20} more.")
 
-        print(f"\n\033[94m(Actions: 'note <id> <txt>', 'rm', 'lcd', 'catg', 'view', 'back')\n")
+        print(f"\n\033[94m(Actions: 'rm', 'lcd', 'catg', 'view', 'note <id> <txt>', 'back(or ^C)')\n")
 
     # --- UNIFIED COMMANDS ---
 
