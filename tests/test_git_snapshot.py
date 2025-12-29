@@ -137,3 +137,31 @@ def test_non_git_directory(git_workspace):
         task = json.loads(f.readline())
         
     assert task['git'] is None
+
+def test_git_deep_directory(git_workspace):
+    """测试：在 Git 仓库的深层子目录下提交，应能向上查找 Git 根目录"""
+    repo_dir, tq_dir, head_v1 = git_workspace
+    
+    # 1. 创建深层目录结构
+    deep_dir = repo_dir / "src" / "deep" / "module"
+    deep_dir.mkdir(parents=True)
+    
+    shell = tq.TaskQueueShell()
+    
+    cwd_backup = os.getcwd()
+    os.chdir(deep_dir)
+    try:
+        # 在深层目录提交
+        shell.default("python script.py")
+    finally:
+        os.chdir(cwd_backup)
+        
+    # 2. 验证队列
+    q_file = tq_dir / "0.queue"
+    with open(q_file, 'r') as f:
+        task = json.loads(f.readline())
+        
+    # 应该能捕获到 HEAD
+    assert task['git'] == head_v1
+    # WorkDir 应该是深层目录
+    assert task['wd'] == str(deep_dir)

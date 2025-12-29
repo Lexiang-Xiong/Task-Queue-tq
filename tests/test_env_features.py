@@ -52,10 +52,11 @@ def test_session_env_switching(mock_workspace, mock_conda_system):
     
     with open(q_file, 'r') as f:
         line = f.readline().strip()
-        task = json.loads(line) # V2 Protocol
+        task = json.loads(line)
         
     cmd = task['c']
-    assert "source /mock/anaconda3/etc/profile.d/conda.sh" in cmd
+    # [UPDATED] Assert '.' instead of 'source'
+    assert ". /mock/anaconda3/etc/profile.d/conda.sh" in cmd
     assert "conda activate session_env_v1" in cmd
     assert "python train.py" in cmd
 
@@ -70,7 +71,6 @@ def test_inline_env_override(mock_workspace, mock_conda_system):
     
     cmd = task['c']
     assert "conda activate data_env" in cmd
-    # Ensure -e is consumed
     assert "-e data_env" not in cmd.split("&&")[-1] 
 
 def test_priority_logic_mixed(mock_workspace, mock_conda_system):
@@ -101,6 +101,8 @@ def test_priority_logic_mixed(mock_workspace, mock_conda_system):
     assert "global_env" not in task_b['c']
     
     # Task C -> base (raw command)
+    # [UPDATED] Check that we DON'T try to source/dot conda
+    assert ". /mock" not in task_c['c']
     assert "source" not in task_c['c']
     assert task_c['c'] == "python task_c.py"
 
