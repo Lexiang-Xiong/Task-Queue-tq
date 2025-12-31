@@ -20,7 +20,7 @@ TASK_LOG_DIR = os.path.join(LOG_DIR, "tasks")
 SCHEDULER_SCRIPT = os.path.join(BASE_DIR, "scheduler.sh")
 
 class TaskQueueShell(cmd.Cmd):
-    intro = 'Welcome to Task Queue Console v2.0 (Modal Edition).\nType "man" for help.'
+    intro = 'Welcome to Task Queue Console v2.1 (Enhanced View).\nType "man" for help.'
     
     def __init__(self):
         super().__init__()
@@ -104,15 +104,13 @@ class TaskQueueShell(cmd.Cmd):
         无论在 Git 仓库的哪一层，都尝试捕获状态。
         """
         try:
-            # 1. 检查是否在 Git 仓库中 (通过 git rev-parse --is-inside-work-tree)
-            # 这一步替代了之前幼稚的 .git 目录检查
+            # 1. 检查是否在 Git 仓库中
             subprocess.check_call(
                 ['git', 'rev-parse', '--is-inside-work-tree'], 
                 cwd=path, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL
             )
             
             # 2. 尝试为未提交的变更(含Untracked)创建快照
-            # git stash create 返回一个 hash，但不修改 refs/stash，完全隐形
             cmd = ['git', 'stash', 'create', '--include-untracked']
             stash_hash = subprocess.check_output(
                 cmd, cwd=path, stderr=subprocess.DEVNULL
@@ -194,7 +192,7 @@ class TaskQueueShell(cmd.Cmd):
         else:
             self.mode = 'HOME'
             self.history_cache = [] # 清空缓存
-            self.update_prompt()    # <--- [修复核心] 必须显式刷新提示符字符串
+            self.update_prompt()
             print("[*] Returned to Dashboard.")
 
     def do_exit(self, arg):
@@ -597,16 +595,48 @@ class TaskQueueShell(cmd.Cmd):
         print(f"[*] Archived {count} files.")
 
     def do_view(self, arg):
-        # view works in logs mode
+        """
+        View log content.
+        Usage: view <id> [-f]
+        -f: Follow mode (tail -f)
+        """
         if self.mode != 'LOGS':
             print("[!] 'view' works in LOGS mode. Type 'hist'."); return
-        elif not arg: print("[!] Usage: view <id>"); return
+        
+        args = arg.split()
+        if not args:
+            print("[!] Usage: view <id> [-f]"); return
+
+        follow = False
+        target_id = None
+        
+        # 解析参数
+        for a in args:
+            if a in ['-f', '--follow']:
+                follow = True
+            else:
+                target_id = a
+        
+        if not target_id:
+             print("[!] Missing ID."); return
+
         try:
-            idx = int(arg) - 1
+            idx = int(target_id) - 1
             fpath, status = self._get_cache_item(idx)
-            if fpath: os.system(f"less -R {fpath}")
-            else: print(f"[!] Cannot view: {status}")
-        except: print("[!] Invalid ID")
+            if fpath: 
+                if follow:
+                    print(f"\n[INFO] Tailing log (Ctrl+C to stop)...")
+                    try:
+                        # 捕获 KeyboardInterrupt 防止退出 Log 模式
+                        os.system(f"tail -n 50 -f {fpath}")
+                    except KeyboardInterrupt:
+                        print("\n[Stopped]")
+                else:
+                    os.system(f"less -R {fpath}")
+            else: 
+                print(f"[!] Cannot view: {status}")
+        except ValueError:
+            print("[!] Invalid ID")
 
     def do_note(self, arg):
         """
@@ -816,7 +846,7 @@ class TaskQueueShell(cmd.Cmd):
 
     def do_man(self, arg):
         print("""
-\033[1mTask Queue (tq) v2.0 (Modal Edition)\033[0m
+\033[1mTask Queue (tq) v2.1 (Enhanced)\033[0m
 ===========================================
 \033[93m1. Queue Management (Waiting Tasks):\033[0m
   use <id>          : Switch queue context (e.g., 'use 1')
@@ -829,7 +859,8 @@ class TaskQueueShell(cmd.Cmd):
   rm <ids>          : [In Logs Mode] Delete log files
   lcd <folder>      : [In Logs Mode] Change virtual directory
   catg <id> <dir>   : [In Logs Mode] Archive logs to folder
-  view <id>         : [In Logs Mode] View log content
+  view <id> [-f]    : [In Logs Mode] View log content. 
+                      Use \033[92m-f\033[0m to follow (tail -f).
   note <id> <txt>   : [In Logs Mode] Add comment to log
   logs [dir]        : Quick Shell CD to logs directory
 

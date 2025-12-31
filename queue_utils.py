@@ -4,6 +4,12 @@ import os
 import json
 import shlex
 
+# ==============================================================================
+# OUTPUT POLICY:
+# STDOUT is STRICTLY reserved for Shell `eval` communication.
+# Any debug information MUST go to STDERR.
+# ==============================================================================
+
 def parse_line(line):
     line = line.strip()
     if not line: return None
@@ -54,25 +60,28 @@ def pop_best_task(queue_file):
             for t in valid_tasks:
                 f.write(json.dumps(t) + "\n")
                 
-        # --- 输出 Shell 变量 ---
-        print(f"TQ_PRIO={best['p']}")
-        print(f"TQ_GRACE={best['g']}")
-        print(f"TQ_TAG={shlex.quote(str(best['t']))}")
-        print(f"TQ_WORKDIR={shlex.quote(str(best.get('wd') or ''))}")
-        print(f"TQ_GIT_HASH={shlex.quote(best.get('git') or '')}")
-        print(f"TQ_CMD={shlex.quote(best['c'])}")
+        # --- 输出 Shell 变量 (STRICT: STDOUT ONLY) ---
+        out = []
+        out.append(f"TQ_PRIO={best['p']}")
+        out.append(f"TQ_GRACE={best['g']}")
+        out.append(f"TQ_TAG={shlex.quote(str(best['t']))}")
+        out.append(f"TQ_WORKDIR={shlex.quote(str(best.get('wd') or ''))}")
+        out.append(f"TQ_GIT_HASH={shlex.quote(best.get('git') or '')}")
+        out.append(f"TQ_CMD={shlex.quote(best['c'])}")
+        # Log Persistence Field
+        out.append(f"TQ_LOG_PATH={shlex.quote(str(best.get('lp') or ''))}")
+        out.append(f"TQ_JSON={shlex.quote(json.dumps(best))}")
         
-        # [核心修复] 必须输出 TQ_LOG_PATH，否则 scheduler.sh 收不到旧路径
-        print(f"TQ_LOG_PATH={shlex.quote(str(best.get('lp') or ''))}")
-        
-        print(f"TQ_JSON={shlex.quote(json.dumps(best))}")
+        # 原子性写入 Stdout
+        sys.stdout.write("\n".join(out) + "\n")
+        sys.stdout.flush()
         
     except Exception as e:
         sys.stderr.write(f"Error in pop: {e}\n")
 
 def get_min_priority(queue_file):
     if not os.path.exists(queue_file):
-        print(99999)
+        sys.stdout.write("99999\n")
         return
     try:
         with open(queue_file, 'r') as f:
@@ -81,9 +90,9 @@ def get_min_priority(queue_file):
                 t = parse_line(line)
                 if t and t['p'] < min_p:
                     min_p = t['p']
-            print(min_p)
+            sys.stdout.write(f"{min_p}\n")
     except:
-        print(99999)
+        sys.stdout.write("99999\n")
 
 if __name__ == "__main__":
     if len(sys.argv) < 3: sys.exit(1)

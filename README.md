@@ -69,6 +69,7 @@
 
 *   **📂 集中化日志管理 (Centralized Logging)**
     所有任务的标准输出（stdout/stderr）自动捕获归档。配合 `tq` 的交互式终端，支持：
+    *   **Real-time Monitoring**: 使用 `view <id> -f` 像 `tail -f` 一样实时追踪正在运行的任务日志。
     *   **Note**: 给日志打备注（如 `note 1 best_model`）。
     *   **Category**: 将日志归档到子目录（如 `catg 1 archived/failed`）。
 
@@ -168,7 +169,10 @@ $ tq
 一个功能强大的日志文件管理器。
 
 *   **树状视图**: 自动显示当前目录的日志文件树，高亮显示 "YOU" (当前位置) 和 "EYE" (查看位置)。
-*   **`view <id>`**: 使用 `less` 查看日志内容。
+*   **`view <id> [-f]`**: 查看日志内容。
+    *   默认使用 `less` 分页查看。
+    *   加上 **`-f`** 参数（如 `view 1 -f`）可进行实时追踪（Tail Follow）。
+    *   在追踪模式下按 **`Ctrl+C`** 可停止追踪并停留在日志模式。
 *   **`note <id> <text>`**: **[新功能]** 给日志文件添加备注。
     *   *示例:* `note 1 Best result so far` -> 文件列表中会显示黄色高亮的备注。
 *   **`catg <id> <folder>`**: **[新功能]** 归档/分类。将指定日志移动到子文件夹。
