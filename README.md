@@ -95,7 +95,7 @@
 ```bash
 # 1. Clone 仓库
 git clone https://github.com/Lexiang-Xiong/Task-Queue-tq.git
-cd task_queue
+cd Task-Queue-tq
 
 # 2. 运行安装脚本 (自动配置 PATH 和 Alias)
 bash setup.sh
